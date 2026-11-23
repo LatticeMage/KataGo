@@ -1,0 +1,11 @@
+node_modules/
+.venv/
+__pycache__/
+models/
+web/models/
+web/ort/
+web/coi-serviceworker.js
+*.onnx
+*.bin
+*.bin.gz
+*.zip

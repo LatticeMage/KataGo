@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>KataGo in the Browser</title>
+<script>
+  // GitHub Pages cannot send COOP/COEP headers, so a service worker adds them there. Servers that already
+  // send them (tools/serve.js) don't need it, and a stale one is removed.
+  if (window.crossOriginIsolated) {
+    if (navigator.serviceWorker) navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister()));
+  } else {
+    document.write('<script src="coi-serviceworker.js?v=7"><\/script>');
+  }
+</script>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --line:#2c313a; --fg:#e6e8ec; --dim:#8b93a1; --acc:#4cc38a; --warn:#f0b44c; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .app { display:grid; grid-template-columns: minmax(0,1fr) 340px; gap:16px; max-width:1180px; margin:0 auto; padding:16px; }
+  @media (max-width: 860px) { .app { grid-template-columns: 1fr; } }
+  #boardWrap { position:relative; width:100%; aspect-ratio:1; max-width:min(100vw - 32px, 86vh); margin:0 auto; }
+  canvas { width:100%; height:100%; display:block; border-radius:8px; touch-action:manipulation; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+  .panel h3 { margin:0 0 8px; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); font-weight:600; }
+  label { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:6px 0; }
+  select, input[type=number] { background:#12141a; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px 6px; min-width:0; max-width:180px; }
+  input[type=range] { width:150px; }
+  button { background:#2a2f38; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button:hover:not(:disabled) { background:#343b46; } button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--acc); color:#06241a; border-color:var(--acc); font-weight:600; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; }
+  .stat { display:flex; justify-content:space-between; margin:2px 0; color:var(--dim); } .stat b { color:var(--fg); font-weight:600; font-variant-numeric:tabular-nums; }
+  #bar { height:10px; border-radius:5px; background:#000; overflow:hidden; margin:8px 0 2px; }
+  #barFill { height:100%; width:50%; background:#f2f2f2; transition:width .25s; }
+  #status { color:var(--warn); min-height:20px; } #status.ok { color:var(--acc); }
+  #load { height:6px; background:#000; border-radius:3px; overflow:hidden; } #loadFill { height:100%; width:0; background:var(--acc); }
+  small { color:var(--dim); }
+  .clocks { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .clk { border:1px solid var(--line); border-radius:8px; padding:8px 10px; opacity:.55; }
+  .clk.active { opacity:1; border-color:var(--acc); box-shadow:0 0 0 1px var(--acc) inset; }
+  .clk.low.active { border-color:#e5534b; box-shadow:0 0 0 1px #e5534b inset; } .clk.low.active b { color:#e5534b; }
+  .clk .who { display:block; color:var(--dim); font-size:12px; } .clk b { display:block; font-size:34px; line-height:1.15; font-variant-numeric:tabular-nums; }
+  .cbar { height:4px; background:#000; border-radius:2px; margin-top:4px; overflow:hidden; } .cbar i { display:block; height:100%; width:100%; background:var(--acc); }
+  .gameOnly[hidden] { display:none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div>
+    <div id="boardWrap"><canvas id="board"></canvas></div>
+  </div>
+  <div>
+    <div class="panel">
+      <h3>Engine <span style="float:right;text-transform:none;letter-spacing:0">build 7 · modes</span></h3>
+      <div id="status">starting…</div>
+      <div id="load"><div id="loadFill"></div></div>
+      <label>Model
+        <select id="model">
+          <option value="https://raw.githubusercontent.com/HomunMage/model/main/onnx/b18c384nbt-int8.onnx">b18c384nbt int8 (27 MB)</option>
+          <option value="https://raw.githubusercontent.com/HomunMage/model/main/onnx/b10c128.onnx">b10c128 fp32 (12 MB, fast)</option>
+        </select></label>
+      <label>Backend
+        <select id="backend"><option value="wasm">WASM (CPU)</option><option value="webgpu">WebGPU</option></select></label>
+      <label>Threads <input id="threads" type="number" min="1" max="32" value="4"></label>
+      <small>Model, backend and threads reload the engine (the model is cached after the first download).</small>
+    </div>
+    <div class="panel gameOnly" id="clockPanel" hidden>
+      <h3>Clock <small style="float:right;text-transform:none;letter-spacing:0"><label style="margin:0;gap:4px"><input id="enforce" type="checkbox"> enforce for me</label></small></h3>
+      <div class="clocks">
+        <div class="clk" id="clkB"><span class="who">● Black</span><b id="clkBt">10.0</b><div class="cbar"><i id="clkBb"></i></div></div>
+        <div class="clk" id="clkW"><span class="who">○ White</span><b id="clkWt">10.0</b><div class="cbar"><i id="clkWb"></i></div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Mode</h3>
+      <label>Mode
+        <select id="mode"><option value="analysis" selected>Analysis (free play, live analysis)</option><option value="game">Game vs AI (timed)</option></select></label>
+      <label>Board
+        <select id="size"><option>9</option><option>13</option><option selected>19</option></select></label>
+      <label>Komi <input id="komi" type="number" step="0.5" value="7.5"></label>
+      <div class="gameOnly" hidden>
+        <label>You play
+          <select id="color"><option value="1">Black</option><option value="2">White</option></select></label>
+        <label>Seconds per move <input id="secs" type="number" min="1" max="600" value="10"></label>
+      </div>
+      <div class="row">
+        <button id="newGame" class="primary">Clear / New game</button>
+        <button id="pass">Pass</button>
+        <button id="undo">Undo</button>
+      </div>
+      <small id="modeHelp">Click to place stones — colours alternate. The engine keeps analysing the current position.</small>
+    </div>
+    <div class="panel">
+      <h3>Search</h3>
+      <label>Batch <input id="batch" type="number" min="1" max="32" value="4"></label>
+      <label>Ownership <input id="ownership" type="checkbox" checked></label>
+    </div>
+    <div class="panel">
+      <h3>Position</h3>
+      <div class="stat"><span>Black win rate</span><b id="wr">–</b></div>
+      <div id="bar"><div id="barFill"></div></div>
+      <div class="stat"><span>Score (B lead)</span><b id="score">–</b></div>
+      <div class="stat"><span>Visits</span><b id="vis">–</b></div>
+      <div class="stat"><span>Speed</span><b id="speed">–</b></div>
+      <div class="stat"><span>Best line</span><b id="pv">–</b></div>
+    </div>
+  </div>
+</div>
+<script src="engine.js?v=7"></script>
+<script src="app.js?v=7"></script>
+</body>
+</html>
